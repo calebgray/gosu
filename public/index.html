@@ -1,0 +1,42 @@
+<html>
+<head>
+    <link rel="stylesheet" href="/libs/bootstrap.min.css">
+    <script type="text/javascript" src="/libs/bootstrap-native-v4.min.js"></script>
+    <script type="text/javascript" src="/libs/app.js"></script>
+    <script type="text/javascript">
+        'use strict';
+
+        // Default Fetch Options
+        $$.SetDefaultFetchOptions({
+            headers: [['Accept', 'application/json']]
+        });
+
+        // Button
+        function myButtonClick(btn) {
+            btn.innerHTML = 'Loading...';
+            $$.Fetch('/', $$.OverrideDefaultFetchOptions({
+                onSuccess: function() { console.log("success"); },
+                onFailure: function() { console.log("failure"); },
+                onComplete: function() { btn.innerHTML = 'Fetch Again'; }
+            }));
+        }
+    </script>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col">
+                One
+            </div>
+            <div class="col">
+                Two
+            </div>
+            <div class="col">
+                <button type="button" onclick="myButtonClick(this)" class="btn btn-primary">
+                    Fetch Data
+                </button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
