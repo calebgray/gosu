@@ -27,7 +27,7 @@ this.$$ = {
      * @param {Object} options
      */
     OverrideDefaultFetchOptions: function(options) {
-        return $$.Extend($$._fetchOptions, options);
+        return $$.Extend({}, $$._fetchOptions, options);
     },
 
     /**

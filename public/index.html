@@ -8,16 +8,19 @@
 
         // Default Fetch Options
         $$.SetDefaultFetchOptions({
-            headers: [['Accept', 'application/json']]
+            headers: [['Accept', 'application/json']],
+            onSuccess: function(xhr, uri) { console.log(uri + " :: success :: " + xhr.response); },
+            onFailure: function(xhr, uri) { console.log(uri + " :: failure :: " + xhr.response); }
         });
 
         // Button
-        function myButtonClick(btn) {
+        function myButtonClick(btn, url) {
+            var prevInnerHTML = btn.innerHTML;
             btn.innerHTML = 'Loading...';
-            $$.Fetch('/', $$.OverrideDefaultFetchOptions({
-                onSuccess: function() { console.log("success"); },
-                onFailure: function() { console.log("failure"); },
-                onComplete: function() { btn.innerHTML = 'Fetch Again'; }
+            $$.Fetch(url, $$.OverrideDefaultFetchOptions({
+                onComplete: function() {
+                    btn.innerHTML = prevInnerHTML;
+                }
             }));
         }
     </script>
@@ -26,14 +29,18 @@
     <div class="container-fluid">
         <div class="row">
             <div class="col">
-                One
+                <button type="button" onclick="myButtonClick(this, '/')" class="btn btn-primary">
+                    Test Error
+                </button>
             </div>
             <div class="col">
-                Two
+                <button type="button" onclick="myButtonClick(this, '/login')" class="btn btn-primary">
+                    Test Login
+                </button>
             </div>
             <div class="col">
-                <button type="button" onclick="myButtonClick(this)" class="btn btn-primary">
-                    Fetch Data
+                <button type="button" onclick="myButtonClick(this, '/status')" class="btn btn-primary">
+                    Test Status
                 </button>
             </div>
         </div>
