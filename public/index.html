@@ -8,18 +8,30 @@
 
         // Default Fetch Options
         $$.SetDefaultFetchOptions({
-            headers: [['Accept', 'application/json']],
+            headers: [
+                ['Accept', 'application/json'],
+                ['Content-Type', 'application/json']
+            ],
             onSuccess: function(xhr, uri) { console.log(uri + " :: success :: " + xhr.response); },
             onFailure: function(xhr, uri) { console.log(uri + " :: failure :: " + xhr.response); }
         });
 
+        // Set Password
+        var password = "";
+        function myPassword(input) {
+            password = input.value;
+        }
+
         // Button
-        function myButtonClick(btn, url) {
+        function myButtonClick(btn, url, data) {
             var prevInnerHTML = btn.innerHTML;
             btn.innerHTML = 'Loading...';
             $$.Fetch(url, $$.OverrideDefaultFetchOptions({
-                onComplete: function() {
+                data: data,
+                onComplete: function(xhr) {
                     btn.innerHTML = prevInnerHTML;
+                    var result = JSON.parse(xhr.response);
+                    console.log(result);
                 }
             }));
         }
@@ -42,6 +54,14 @@
                 <button type="button" onclick="myButtonClick(this, '/status')" class="btn btn-primary">
                     Test Status
                 </button>
+            </div>
+            <div class="col">
+                <button type="button" onclick="myButtonClick(this, '/bootstrap', { host: 'cloud02.calebgray.com:22', username: 'root', password: password })" class="btn btn-primary">
+                    Test POST
+                </button>
+                <p>
+                    <label>Password:</label><input type="text" class="input" onchange="myPassword(this)">
+                </p>
             </div>
         </div>
     </div>

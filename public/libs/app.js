@@ -38,7 +38,7 @@ this.$$ = {
      */
     Fetch: function(uri, options) {
         if (!options) options = $$._fetchOptions;
-        if (!options.method) options.method = 'GET';
+        if (!options.method) options.method = !options.data ? 'GET' : 'POST';
         var xhr = new XMLHttpRequest();
         if (options.onSuccess || options.onFailure || options.onComplete) {
             xhr.onreadystatechange = function() {
@@ -57,7 +57,11 @@ this.$$ = {
                 xhr.setRequestHeader(key, value);
             });
         }
-        xhr.send();
+        if (options.data) {
+            xhr.send(JSON.stringify(options.data));
+        } else {
+            xhr.send();
+        }
         return xhr;
     }
 };
