@@ -1,18 +1,19 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"strings"
+	"time"
+
 	"github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"golang.org/x/crypto/ssh"
-	"strings"
-	"time"
-	"encoding/json"
-	"io/ioutil"
-	"net"
-	"io"
-	"os"
 )
 
 var tokenSecret = []byte("pgpbYOVcEpoAkl0W0leYHeyTs4nbNpZyTgEFZyrJEDwytbUrPfLIjXYhi3X2nkMTg6nWA42qBb6jKe7rzoAwOoxPEVMNyWSw4DPY3JokIDlSbb5MDDo6Y1pU4F4Ryak29iZoPCQVEHuCAKS84uSUsJz2TtLmKf7g02Hu1sRYxpk87QlWLFXowZBw5d0WLvHyygvHId6E")
@@ -23,8 +24,9 @@ type Config struct {
 }
 
 type User struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	Tokens   []string `json:"tokens"`
 }
 
 type Host struct {
@@ -39,11 +41,15 @@ var DefaultConfig = Config{
 		{
 			"admin",
 			"admin",
+			[]string{},
 		},
 	},
 	[]Host{},
 }
 
+var Sessions []*ssh.Session
+
+// TODO: Decrypt Config File
 func loadConfig() (Config, error) {
 	// Load Config File
 	var config Config
@@ -57,6 +63,7 @@ func loadConfig() (Config, error) {
 	return DefaultConfig, nil
 }
 
+// TODO: Encrypt Config File
 func saveConfig(config Config) error {
 	if raw, err := json.MarshalIndent(config, "", "\t"); err == nil {
 		if err := ioutil.WriteFile("config.json", raw, 0644); err != nil {
@@ -133,7 +140,6 @@ func main() {
 						break
 					}
 				}
-
 			}
 			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
 			return
@@ -161,30 +167,51 @@ func main() {
 
 		// Handle the Request
 		switch r.URL.String() {
-		case "/bootstrap":
+		case "/execute":
+			session := Sessions[0]
+			if err = session.Run("uname"); err == nil {
+				// Respond
+				var stdout io.Reader
+				if stdout, err = session.StdoutPipe(); err == nil {
+					var result []byte
+					if result, err = ioutil.ReadAll(stdout); err == nil {
+						execute := make(map[string]interface{})
+						execute["id"] = len(Sessions)
+						execute["output"] = string(result)
+						var body []byte
+						if body, err = json.Marshal(&execute); err == nil {
+							w.Write(body)
+							return
+						}
+					}
+				}
+			}
+
+			return
+		case "/addhost":
 			var err error
-			var bootstrap map[string]string
-			if err = json.NewDecoder(r.Body).Decode(&bootstrap); err == nil {
+			var addhost map[string]string
+			if err = json.NewDecoder(r.Body).Decode(&addhost); err == nil {
 				var auth []ssh.AuthMethod
-				if len(bootstrap["public_key"]) == 0 {
+				if len(addhost["public_key"]) == 0 {
 					auth = []ssh.AuthMethod{
-						ssh.Password(bootstrap["password"]),
+						ssh.Password(addhost["password"]),
 					}
 				} else {
 					var key ssh.AuthMethod
-					if key, err = readPublicKey([]byte(bootstrap["public_key"])); err == nil {
+					if key, err = readPublicKey([]byte(addhost["public_key"])); err == nil {
 						auth = []ssh.AuthMethod{
 							key,
-							ssh.Password(bootstrap["password"]),
+							ssh.Password(addhost["password"]),
 						}
 					} else {
-						goto bootstrapError
+						goto addhostError
 					}
 				}
 
 				var connection *ssh.Client
-				if connection, err = ssh.Dial("tcp", bootstrap["host"], &ssh.ClientConfig{
-					User: bootstrap["username"],
+				if connection, err = ssh.Dial("tcp", addhost["host"], &ssh.ClientConfig{
+					User: addhost["username"],
 					Auth: auth,
 					HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 						return nil // TODO: Store and check the host key.
@@ -196,15 +223,32 @@ func main() {
 						var stdout io.Reader
 						if stdout, err = session.StdoutPipe(); err == nil {
 							if err = session.RequestPty("xterm", 1, 1, ssh.TerminalModes{}); err == nil {
-								if err = session.Run("ls -l /"); err == nil {
+								if err = session.Run("pwd"); err == nil {
 									// Respond
 									var result []byte
 									if result, err = ioutil.ReadAll(stdout); err == nil {
-										bootstrap = make(map[string]string)
-										bootstrap["result"] = string(result)
+										config.Hosts = append(config.Hosts, Host{
+											addhost["host"],
+											addhost["username"],
+											addhost["password"],
+											addhost["publicKey"],
+										})
+										if err = saveConfig(config); err != nil {
+											log.Fatal("Error Saving Config:", err.Error())
+											return
+										}
 
+										Sessions = append(Sessions, session)
+
+										type AddHost struct {
+											Id     int    `json:"id"`
+											Output string `json:"output"`
+										}
 										var body []byte
-										if body, err = json.Marshal(&bootstrap); err == nil {
+										if body, err = json.Marshal(&AddHost{
+											len(Sessions) - 1,
+											string(result),
+										}); err == nil {
 											w.Write(body)
 											return
 										}
@@ -216,7 +260,7 @@ func main() {
 				}
 			}
 
-		bootstrapError:
+		addhostError:
 			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
 			return
 		case "/status":
