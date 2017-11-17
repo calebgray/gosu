@@ -18,7 +18,6 @@ this.$$ = {
      */
     SetDefaultFetchOptions: function(options) {
         if (!options) return;
-        if (options.headers) options.headers = new Map(options.headers);
         $$._fetchOptions = options;
     },
 
@@ -53,8 +52,8 @@ this.$$ = {
         }
         xhr.open(options.method, uri);
         if (options.headers) {
-            options.headers.forEach(function(value, key) {
-                xhr.setRequestHeader(key, value);
+            options.headers.forEach(function(value) {
+                xhr.setRequestHeader(value[0], value[1]);
             });
         }
         if (options.data) {

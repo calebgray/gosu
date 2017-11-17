@@ -7,31 +7,42 @@
         'use strict';
 
         // Default Fetch Options
-        $$.SetDefaultFetchOptions({
+        var defaultFetchOptions = {
             headers: [
-                ['Accept', 'application/json'],
-                ['Content-Type', 'application/json']
-            ],
-            onSuccess: function(xhr, uri) { console.log(uri + " :: success :: " + xhr.response); },
-            onFailure: function(xhr, uri) { console.log(uri + " :: failure :: " + xhr.response); }
-        });
+                [ 'Accept', 'application/json' ],
+                [ 'Content-Type', 'application/json' ],
+                [ 'Authorization', '' ]
+            ]
+        };
+        $$.SetDefaultFetchOptions(defaultFetchOptions);
 
-        // Set Password
-        var password = "";
-        function myPassword(input) {
-            password = input.value;
+        // Manage Form Fields
+        var forms = {};
+        function onChange(input) {
+            if (!forms[input.form.id]) forms[input.form.id] = {};
+            forms[input.form.id][input.id] = input.value;
         }
 
-        // Button
-        function myButtonClick(btn, url, data) {
+        // Manage Login
+        function onLogin(token) {
+            defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + token ];
+            $$.SetDefaultFetchOptions(defaultFetchOptions);
+        }
+
+        // Click a Button
+        function onClick(btn, url, form, callback) {
             var prevInnerHTML = btn.innerHTML;
             btn.innerHTML = 'Loading...';
             $$.Fetch(url, $$.OverrideDefaultFetchOptions({
-                data: data,
-                onComplete: function(xhr) {
+                data: !form ? null : forms[form],
+                onSuccess: !callback ? null : function(xhr) {
+                    callback(JSON.parse(xhr.response));
+                },
+                onFailure: function(xhr, uri) {
+                    console.log(uri + " :: failure :: " + xhr.response);
+                },
+                onComplete: function() {
                     btn.innerHTML = prevInnerHTML;
-                    var result = JSON.parse(xhr.response);
-                    console.log(result);
                 }
             }));
         }
@@ -41,27 +52,42 @@
     <div class="container-fluid">
         <div class="row">
             <div class="col">
-                <button type="button" onclick="myButtonClick(this, '/')" class="btn btn-primary">
-                    Test Error
-                </button>
+                <form id="login" action="#login">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" class="form-control" id="username" placeholder="Username" value="adminy" onchange="onChange(this)">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" class="form-control" id="password" placeholder="Password" value="adminy" onchange="onChange(this)">
+                    </div>
+                    <button type="submit" onclick="onClick(this, '/login', 'login', onLogin)" class="btn btn-primary">
+                        Login
+                    </button>
+                </form>
             </div>
             <div class="col">
-                <button type="button" onclick="myButtonClick(this, '/login')" class="btn btn-primary">
-                    Test Login
-                </button>
-            </div>
-            <div class="col">
-                <button type="button" onclick="myButtonClick(this, '/status')" class="btn btn-primary">
-                    Test Status
-                </button>
-            </div>
-            <div class="col">
-                <button type="button" onclick="myButtonClick(this, '/bootstrap', { host: 'cloud02.calebgray.com:22', username: 'root', password: password })" class="btn btn-primary">
-                    Test POST
-                </button>
-                <p>
-                    <label>Password:</label><input type="text" class="input" onchange="myPassword(this)">
-                </p>
+                <form id="bootstrap" action="#bootstrap">
+                    <div class="form-group">
+                        <label for="host">Host</label>
+                        <input type="text" class="form-control" id="host" placeholder="Host" value="cloud02.calebgray.com:2222" onchange="onChange(this)">
+                    </div>
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" class="form-control" id="username" placeholder="Username" value="rooty" onchange="onChange(this)">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" class="form-control" id="password" placeholder="Password" onchange="onChange(this)">
+                    </div>
+                    <div class="form-group">
+                        <label for="public_key">Public Key</label>
+                        <input type="text" class="form-control" id="public_key" placeholder="Public Key" onchange="onChange(this)">
+                    </div>
+                    <button type="submit" onclick="onClick(this, '/bootstrap', 'bootstrap')" class="btn btn-primary">
+                        Bootstrap
+                    </button>
+                </form>
             </div>
         </div>
     </div>
