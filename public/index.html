@@ -18,20 +18,21 @@
 
         // Manage Form Fields
         var forms = {};
-        function onChange(input) {
-            if (!forms[input.form.id]) forms[input.form.id] = {};
-            forms[input.form.id][input.name] = input.value;
+        function onChange(input, form) {
+            form = form ? form : input.form.id;
+            if (!forms[form]) forms[form] = {};
+            forms[form][input.name] = input.value;
         }
 
         // Manage Login
-        function onLogin(token) {
-            defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + token ];
+        function onLogin(response) {
+            defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + response['token'] ];
             $$.SetDefaultFetchOptions(defaultFetchOptions);
         }
 
         // Manage Execute
         function onExecute(response) {
-            Document.getElementById("terminal").innerHTML = response['output'];
+            document.getElementById('terminal').innerHTML = response['output'];
         }
 
         // Click a Button
@@ -60,11 +61,11 @@
                 <form id="login" action="#login" onsubmit="return false">
                     <div class="form-group">
                         <label for="loginUsername">Username</label>
-                        <input type="text" class="form-control" id="loginUsername" name="username" placeholder="Username" value="adminy" onchange="onChange(this)">
+                        <input type="text" class="form-control" id="loginUsername" name="username" placeholder="Username" value="adminy" onchange="onChange(this, 'login')">
                     </div>
                     <div class="form-group">
                         <label for="loginPassword">Password</label>
-                        <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Password" value="adminy" onchange="onChange(this)">
+                        <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Password" value="adminy" onchange="onChange(this, 'login')">
                     </div>
                     <button type="submit" onclick="onClick(this, '/login', 'login', onLogin)" class="btn btn-primary">
                         Login
@@ -75,37 +76,56 @@
                 <form id="addhost" action="#addhost" onsubmit="return false">
                     <div class="form-group">
                         <label for="host">Host</label>
-                        <input type="text" class="form-control" id="host" name="host" placeholder="Host" value="cloud02.calebgray.com:2222" onchange="onChange(this)">
+                        <input type="text" class="form-control" id="host" name="host" placeholder="Host" value="cloud02.calebgray.com:2222" onchange="onChange(this, 'addhost')">
                     </div>
                     <div class="form-group">
                         <label for="addhostUsername">Username</label>
-                        <input type="text" class="form-control" id="addhostUsername" name="username" placeholder="Username" value="rooty" onchange="onChange(this)">
+                        <input type="text" class="form-control" id="addhostUsername" name="username" placeholder="Username" value="rooty" onchange="onChange(this, 'addhost')">
                     </div>
                     <div class="form-group">
                         <label for="addhostPassword">Password</label>
-                        <input type="password" class="form-control" id="addhostPassword" name="password" placeholder="Password" onchange="onChange(this)">
+                        <input type="password" class="form-control" id="addhostPassword" name="password" placeholder="Password" onchange="onChange(this, 'addhost')">
                     </div>
                     <div class="form-group">
                         <label for="public_key">Public Key</label>
-                        <input type="text" class="form-control" id="public_key" name="public_key" placeholder="Public Key" onchange="onChange(this)">
+                        <input type="text" class="form-control" id="public_key" name="public_key" placeholder="Public Key" onchange="onChange(this, 'addhost')">
                     </div>
                     <button type="submit" onclick="onClick(this, '/addhost', 'addhost')" class="btn btn-primary">
-                        Bootstrap
+                        Add Host
+                    </button>
+                </form>
+            </div>
+            <div class="col">
+                <form id="execute" action="#execute" onsubmit="return false">
+                    <div class="form-group">
+                        <label for="executeId">Id</label>
+                        <input type="text" class="form-control" id="executeId" name="id" placeholder="Id" value="00" onchange="onChange(this, 'execute')">
+                    </div>
+                    <div class="form-group">
+                        <label for="executeCommand">Command</label>
+                        <input type="text" class="form-control" id="executeCommand" name="command" placeholder="Command" value="lss" onchange="onChange(this, 'execute')">
+                    </div>
+                    <button type="submit" onclick="onClick(this, '/execute', 'execute', onExecute)" class="btn btn-primary">
+                        Execute
+                    </button>
+                </form>
+            </div>
+            <div class="col">
+                <form id="poll" action="#poll" onsubmit="return false">
+                    <div class="form-group">
+                        <label for="pollId">Id</label>
+                        <input type="text" class="form-control" id="pollId" name="id" placeholder="Id" value="00" onchange="onChange(this, 'poll')">
+                    </div>
+                    <button type="submit" onclick="onClick(this, '/poll', 'poll', onExecute)" class="btn btn-primary">
+                        Poll
                     </button>
                 </form>
             </div>
         </div>
-        <div class="col">
-            <form id="execute" action="#execute" onsubmit="return false">
-                <div class="form-group">
-                    <label for="executeCommand">Command</label>
-                    <input type="text" class="form-control" id="executeCommand" name="command" placeholder="executeCommand" value="" onchange="onChange(this)">
-                </div>
-                <button type="submit" onclick="onClick(this, '/execute', 'execute', onExecute)" class="btn btn-primary">
-                    Login
-                </button>
+        <div class="row">
+            <div class="col">
                 <div id="terminal"></div>
-            </form>
+            </div>
         </div>
     </div>
 </body>
