@@ -15,6 +15,8 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"golang.org/x/crypto/ssh"
+	"fmt"
+	"bufio"
 )
 
 var tokenSecret = []byte("pgpbYOVcEpoAkl0W0leYHeyTs4nbNpZyTgEFZyrJEDwytbUrPfLIjXYhi3X2nkMTg6nWA42qBb6jKe7rzoAwOoxPEVMNyWSw4DPY3JokIDlSbb5MDDo6Y1pU4F4Ryak29iZoPCQVEHuCAKS84uSUsJz2TtLmKf7g02Hu1sRYxpk87QlWLFXowZBw5d0WLvHyygvHId6E")
@@ -194,13 +196,20 @@ func main() {
 				connection := Connections[id]
 
 				// Respond
-				var output []byte
-				if _, err = connection.Stdout.Read(output); err == nil {
-					if err = writeResponse(w, &map[string]interface{}{
-						"output": string(output),
-					}); err == nil {
-						return
-					}
+				var output, errors string
+				scanner := bufio.NewScanner(connection.Stdout)
+				for scanner.Scan() {
+					output += scanner.Text() + "\n"
+				}
+				scanner = bufio.NewScanner(connection.Stderr)
+				for scanner.Scan() {
+					errors += scanner.Text() + "\n"
+				}
+				if err = writeResponse(w, &map[string]interface{}{
+					"out": output,
+					"err": errors,
+				}); err == nil {
+					return
 				}
 			}
 			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
@@ -210,13 +219,14 @@ func main() {
 			if err = json.NewDecoder(r.Body).Decode(&execute); err == nil {
 				id, _ := strconv.Atoi(execute["id"])
 				connection := Connections[id]
-				connection.Stdin.Write([]byte(execute["command"] + "\n"))
+
+				fmt.Fprint(connection.Stdin, execute["command"]+"\n")
 
 				// Respond
 				var output []byte
 				if _, err = connection.Stdout.Read(output); err == nil {
 					if err = writeResponse(w, &map[string]interface{}{
-						"output": string(output),
+						"success": true,
 					}); err == nil {
 						return
 					}
@@ -256,7 +266,7 @@ func main() {
 					var session *ssh.Session
 					if session, err = connection.NewSession(); err == nil {
 						//defer session.Close()
-						if err = session.RequestPty("xterm", 1, 1, ssh.TerminalModes{}); err == nil {
+						if err = session.RequestPty("xterm", 100, 1024, ssh.TerminalModes{}); err == nil {
 							stdout, err := session.StdoutPipe()
 							if err == nil {
 								stderr, err := session.StderrPipe()

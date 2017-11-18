@@ -32,7 +32,8 @@
 
         // Manage Execute
         function onExecute(response) {
-            document.getElementById('terminal').innerHTML = response['output'];
+            document.getElementById('stdout').innerHTML += response['out'];
+            document.getElementById('stderr').innerHTML += response['err'];
         }
 
         // Click a Button
@@ -105,7 +106,7 @@
                         <label for="executeCommand">Command</label>
                         <input type="text" class="form-control" id="executeCommand" name="command" placeholder="Command" value="lss" onchange="onChange(this, 'execute')">
                     </div>
-                    <button type="submit" onclick="onClick(this, '/execute', 'execute', onExecute)" class="btn btn-primary">
+                    <button type="submit" onclick="onClick(this, '/execute', 'execute')" class="btn btn-primary">
                         Execute
                     </button>
                 </form>
@@ -124,7 +125,10 @@
         </div>
         <div class="row">
             <div class="col">
-                <div id="terminal"></div>
+                <pre id="stdout"></pre>
+            </div>
+            <div class="col">
+                <pre id="stderr"></pre>
             </div>
         </div>
     </div>
