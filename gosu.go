@@ -19,11 +19,10 @@ import (
 	"bufio"
 )
 
-var tokenSecret = []byte("pgpbYOVcEpoAkl0W0leYHeyTs4nbNpZyTgEFZyrJEDwytbUrPfLIjXYhi3X2nkMTg6nWA42qBb6jKe7rzoAwOoxPEVMNyWSw4DPY3JokIDlSbb5MDDo6Y1pU4F4Ryak29iZoPCQVEHuCAKS84uSUsJz2TtLmKf7g02Hu1sRYxpk87QlWLFXowZBw5d0WLvHyygvHId6E")
-
 type Config struct {
-	Users []User `json:"users"`
-	Hosts []Host `json:"hosts"`
+	Secret string `json:"secret"`
+	Users  []User `json:"users"`
+	Hosts  []Host `json:"hosts"`
 }
 
 type User struct {
@@ -33,13 +32,15 @@ type User struct {
 }
 
 type Host struct {
-	Host      string `json:"host"`
-	Username  string `json:"username"`
-	Password  string `json:"password"`
-	PublicKey string `json:"publicKey"`
+	Host        string `json:"host"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	PublicKey   string `json:"publicKey"`
+	AutoConnect bool   `json:"autoConnect"`
 }
 
 var DefaultConfig = Config{
+	"pgpbYOVcEpoAkl0W0leYHeyTs4nbNpZyTgEFZyrJEDwytbUrPfLIjXYhi3X2nkMTg6nWA42qBb6jKe7rzoAwOoxPEVMNyWSw4DPY3JokIDlSbb5MDDo6Y1pU4F4Ryak29iZoPCQVEHuCAKS84uSUsJz2TtLmKf7g02Hu1sRYxpk87QlWLFXowZBw5d0WLvHyygvHId6E",
 	[]User{
 		{
 			"admin",
@@ -106,6 +107,157 @@ func writeResponse(w http.ResponseWriter, v interface{}) error {
 	}
 }
 
+func jsonEncode(v interface{}) ([]byte, error) {
+	if data, err := json.Marshal(v); err == nil {
+		return data, nil
+	} else {
+		return nil, err
+	}
+}
+
+func jsonDecode(rc io.ReadCloser, output interface{}) error {
+	return json.NewDecoder(rc).Decode(&output)
+}
+
+func jsonDecodeStringMap(rc io.ReadCloser) (map[string]string, error) {
+	var data map[string]string
+	if err := json.NewDecoder(rc).Decode(&data); err == nil {
+		return data, nil
+	} else {
+		return nil, err
+	}
+}
+
+func jsonDecodeMap(rc io.ReadCloser) (map[string]interface{}, error) {
+	var data map[string]interface{}
+	if err := json.NewDecoder(rc).Decode(&data); err == nil {
+		return data, nil
+	} else {
+		return nil, err
+	}
+}
+
+type LoginConnectionResponse struct {
+	Id   int   `json:"id"`
+	Host *Host `json:"host"`
+}
+
+type LoginResponse struct {
+	Token       string                    `json:"token"`
+	Hosts       []Host                    `json:"hosts"`
+	Connections []LoginConnectionResponse `json:"connections"`
+}
+
+func login(username string, password string, config Config) LoginResponse {
+	for _, user := range config.Users {
+		if user.Username == username && user.Password == password {
+			// Generate a Token
+			token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
+				Id:        user.Username,
+				ExpiresAt: time.Now().Add(time.Hour * 24).Unix(),
+			}).SignedString([]byte(config.Secret))
+
+			// Form the Response
+			loginResponse := LoginResponse{
+				token,
+				config.Hosts,
+				[]LoginConnectionResponse{},
+			}
+
+			// AutoConnect to Hosts
+			for _, host := range config.Hosts {
+				if host.AutoConnect {
+					if response, err := connect(host, config, false); err == nil {
+						loginResponse.Connections = append(loginResponse.Connections, LoginConnectionResponse{
+							response.Id,
+							&host,
+						})
+					}
+				}
+			}
+
+			// Success!
+			return loginResponse
+		}
+	}
+	return LoginResponse{}
+}
+
+type ConnectResponse struct {
+	Id int `json:"id"`
+}
+
+func connect(host Host, config Config, save bool) (ConnectResponse, error) {
+	var err error
+	var auth []ssh.AuthMethod
+	if len(host.PublicKey) == 0 {
+		auth = []ssh.AuthMethod{
+			ssh.Password(host.Password),
+		}
+	} else {
+		var key ssh.AuthMethod
+		if key, err = readPublicKey([]byte(host.PublicKey)); err == nil {
+			auth = []ssh.AuthMethod{
+				key,
+				ssh.Password(host.Password),
+			}
+		} else {
+			return ConnectResponse{}, err
+		}
+	}
+
+	var connection *ssh.Client
+	if connection, err = ssh.Dial("tcp", host.Host, &ssh.ClientConfig{
+		User: host.Username,
+		Auth: auth,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			return nil // TODO: Store and check the host key.
+		},
+	}); err == nil {
+		var session *ssh.Session
+		if session, err = connection.NewSession(); err == nil {
+			//defer session.Close()
+			if err = session.RequestPty("xterm", 100, 1024, ssh.TerminalModes{}); err == nil {
+				stdout, err := session.StdoutPipe()
+				if err == nil {
+					stderr, err := session.StderrPipe()
+					if err == nil {
+						stdin, err := session.StdinPipe()
+						if err == nil {
+							if err = session.Shell(); err == nil {
+								// Respond
+								if save {
+									config.Hosts = append(config.Hosts, Host{
+										host.Host,
+										host.Username,
+										host.Password,
+										host.PublicKey,
+										host.AutoConnect,
+									})
+									if err = saveConfig(config); err != nil {
+										return ConnectResponse{}, err
+									}
+								}
+
+								Connections = append(Connections, Connection{
+									session,
+									stdout,
+									stderr,
+									stdin,
+								})
+								return ConnectResponse{
+									len(Connections) - 1,
+								}, nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return ConnectResponse{}, err
+}
+
 func main() {
 	// Load Config File
 	var err error
@@ -141,38 +293,33 @@ func main() {
 
 		// Login?
 		if r.URL.String() == "/login" {
-			var err error
-			var login map[string]string
-			if err = json.NewDecoder(r.Body).Decode(&login); err == nil {
-				for _, user := range config.Users {
-					if user.Username == login["username"] && user.Password == login["password"] {
-						token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
-							Id:        user.Username,
-							ExpiresAt: time.Now().Add(time.Hour * 24).Unix(),
-						}).SignedString(tokenSecret)
-
-						type Response struct {
-							Token string `json:"token"`
-						}
-						if err = writeResponse(w, &Response{
-							token,
-						}); err == nil {
-							return
-						}
-						break
-					}
-				}
+			type LoginData struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
 			}
-			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+			var loginData LoginData
+			err := jsonDecode(r.Body, &loginData)
+			if err == nil {
+				if response := login(loginData.Username, loginData.Password, config); response.Token != "" {
+					if data, err := jsonEncode(&response); err == nil {
+						w.Write(data)
+					} else {
+						http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+					}
+				} else {
+					http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+			}
 			return
 		}
 
 		// Verify Authorization Token
 		var claims *jwt.StandardClaims
 		if token, err := request.ParseFromRequestWithClaims(r, request.AuthorizationHeaderExtractor, &jwt.StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
-			return tokenSecret, nil
+			return []byte(config.Secret), nil
 		}); err != nil || !token.Valid {
-			println(token)
 			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusUnauthorized)
 			return
 		} else {
@@ -235,85 +382,15 @@ func main() {
 			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
 			return
 		case "/addhost":
-			var err error
-			var addhost map[string]string
-			if err = json.NewDecoder(r.Body).Decode(&addhost); err == nil {
-				var auth []ssh.AuthMethod
-				if len(addhost["public_key"]) == 0 {
-					auth = []ssh.AuthMethod{
-						ssh.Password(addhost["password"]),
-					}
+			var host Host
+			if err := jsonDecode(r.Body, &host); err == nil {
+				if response, err := connect(host, config, true); err == nil {
+					writeResponse(w, response)
 				} else {
-					var key ssh.AuthMethod
-					if key, err = readPublicKey([]byte(addhost["public_key"])); err == nil {
-						auth = []ssh.AuthMethod{
-							key,
-							ssh.Password(addhost["password"]),
-						}
-					} else {
-						goto addhostError
-					}
+					http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
 				}
-
-				var connection *ssh.Client
-				if connection, err = ssh.Dial("tcp", addhost["host"], &ssh.ClientConfig{
-					User: addhost["username"],
-					Auth: auth,
-					HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-						return nil // TODO: Store and check the host key.
-					},
-				}); err == nil {
-					var session *ssh.Session
-					if session, err = connection.NewSession(); err == nil {
-						//defer session.Close()
-						if err = session.RequestPty("xterm", 100, 1024, ssh.TerminalModes{}); err == nil {
-							stdout, err := session.StdoutPipe()
-							if err == nil {
-								stderr, err := session.StderrPipe()
-								if err == nil {
-									stdin, err := session.StdinPipe()
-									if err == nil {
-										if err = session.Shell(); err == nil {
-											// Respond
-											config.Hosts = append(config.Hosts, Host{
-												addhost["host"],
-												addhost["username"],
-												addhost["password"],
-												addhost["publicKey"],
-											})
-											if err = saveConfig(config); err != nil {
-												goto addhostError
-											}
-
-											Connections = append(Connections, Connection{
-												session,
-												stdout,
-												stderr,
-												stdin,
-											})
-
-											type AddHost struct {
-												Id int `json:"id"`
-											}
-											if err = writeResponse(w, &AddHost{
-												len(Connections) - 1,
-											}); err == nil {
-												return
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-		addhostError:
-			if err != nil {
-				http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
 			} else {
-				http.Error(w, "{\"error\":\"Unknown error.\"}", http.StatusInternalServerError)
+				http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
 			}
 			return
 		case "/status":

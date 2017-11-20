@@ -21,13 +21,20 @@
         function onChange(input, form) {
             form = form ? form : input.form.id;
             if (!forms[form]) forms[form] = {};
-            forms[form][input.name] = input.value;
+            forms[form][input.name] = (input.type === "checkbox") ? input.value === "on" : input.value;
         }
 
         // Manage Login
         function onLogin(response) {
             defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + response['token'] ];
             $$.SetDefaultFetchOptions(defaultFetchOptions);
+
+            var html = '';
+            response['hosts'].forEach(function(value){
+                html += value.host;
+                html += "<br>";
+            });
+            document.getElementById('hosts').innerHTML = html;
         }
 
         // Manage Execute
@@ -88,8 +95,12 @@
                         <input type="password" class="form-control" id="addhostPassword" name="password" placeholder="Password" onchange="onChange(this, 'addhost')">
                     </div>
                     <div class="form-group">
-                        <label for="public_key">Public Key</label>
-                        <input type="text" class="form-control" id="public_key" name="public_key" placeholder="Public Key" onchange="onChange(this, 'addhost')">
+                        <label for="publicKey">Public Key</label>
+                        <input type="text" class="form-control" id="publicKey" name="publicKey" placeholder="Public Key" onchange="onChange(this, 'addhost')">
+                    </div>
+                    <div class="form-group">
+                        <input type="checkbox" class="form-control" id="autoConnect" name="autoConnect" onchange="onChange(this, 'addhost')">
+                        <label for="autoConnect">Automatically Connect</label>
                     </div>
                     <button type="submit" onclick="onClick(this, '/addhost', 'addhost')" class="btn btn-primary">
                         Add Host
@@ -124,6 +135,9 @@
             </div>
         </div>
         <div class="row">
+            <div class="col">
+                <div id="hosts"></div>
+            </div>
             <div class="col">
                 <pre id="stdout"></pre>
             </div>
