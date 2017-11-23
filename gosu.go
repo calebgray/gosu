@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"fmt"
 	"bufio"
+	"sync"
 )
 
 type Config struct {
@@ -119,24 +120,6 @@ func jsonDecode(rc io.ReadCloser, output interface{}) error {
 	return json.NewDecoder(rc).Decode(&output)
 }
 
-func jsonDecodeStringMap(rc io.ReadCloser) (map[string]string, error) {
-	var data map[string]string
-	if err := json.NewDecoder(rc).Decode(&data); err == nil {
-		return data, nil
-	} else {
-		return nil, err
-	}
-}
-
-func jsonDecodeMap(rc io.ReadCloser) (map[string]interface{}, error) {
-	var data map[string]interface{}
-	if err := json.NewDecoder(rc).Decode(&data); err == nil {
-		return data, nil
-	} else {
-		return nil, err
-	}
-}
-
 type LoginConnectionResponse struct {
 	Id   int   `json:"id"`
 	Host *Host `json:"host"`
@@ -148,9 +131,14 @@ type LoginResponse struct {
 	Connections []LoginConnectionResponse `json:"connections"`
 }
 
-func login(username string, password string, config Config) LoginResponse {
+func login(username string, password string, config Config) (LoginResponse, error) {
 	for _, user := range config.Users {
-		if user.Username == username && user.Password == password {
+		if user.Username != username {
+			continue
+		}
+		if user.Password != password {
+			return LoginResponse{}, fmt.Errorf("incorrect password")
+		} else {
 			// Generate a Token
 			token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
 				Id:        user.Username,
@@ -177,10 +165,10 @@ func login(username string, password string, config Config) LoginResponse {
 			}
 
 			// Success!
-			return loginResponse
+			return loginResponse, nil
 		}
 	}
-	return LoginResponse{}
+	return LoginResponse{}, fmt.Errorf("user not found")
 }
 
 type ConnectResponse struct {
@@ -239,6 +227,16 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 									}
 								}
 
+								// Keep Alive
+								go func() {
+									var err error
+									for err == nil {
+										time.Sleep(time.Second * 10)
+										_, _, err = connection.SendRequest("keepalive@calebgray.com", true, nil)
+									}
+								}()
+
+								// Return the Response
 								Connections = append(Connections, Connection{
 									session,
 									stdout,
@@ -298,9 +296,8 @@ func main() {
 				Password string `json:"password"`
 			}
 			var loginData LoginData
-			err := jsonDecode(r.Body, &loginData)
-			if err == nil {
-				if response := login(loginData.Username, loginData.Password, config); response.Token != "" {
+			if err := jsonDecode(r.Body, &loginData); err == nil {
+				if response, err := login(loginData.Username, loginData.Password, config); err == nil {
 					if data, err := jsonEncode(&response); err == nil {
 						w.Write(data)
 					} else {
@@ -340,18 +337,38 @@ func main() {
 			var poll map[string]string
 			if err = json.NewDecoder(r.Body).Decode(&poll); err == nil {
 				id, _ := strconv.Atoi(poll["id"])
+				if id >= len(Connections) {
+					http.Error(w, "{\"error\":\"unknown host id\"}", http.StatusInternalServerError)
+					return
+				}
 				connection := Connections[id]
 
-				// Respond
+				var wg sync.WaitGroup
+				wg.Add(1)
+
 				var output, errors string
-				scanner := bufio.NewScanner(connection.Stdout)
-				for scanner.Scan() {
-					output += scanner.Text() + "\n"
-				}
-				scanner = bufio.NewScanner(connection.Stderr)
-				for scanner.Scan() {
-					errors += scanner.Text() + "\n"
-				}
+				go func() {
+					scanner := bufio.NewScanner(connection.Stdout)
+					for scanner.Scan() {
+						output += scanner.Text() + "\n"
+					}
+					scanner = bufio.NewScanner(connection.Stderr)
+					for scanner.Scan() {
+						errors += scanner.Text() + "\n"
+					}
+					wg.Done()
+				}()
+
+				// Timeout
+				go func() {
+					time.Sleep(time.Second * 1)
+					wg.Done()
+				}()
+
+				// Wait for Output or Timeout
+				wg.Wait()
+
+				// Respond
 				if err = writeResponse(w, &map[string]interface{}{
 					"out": output,
 					"err": errors,
@@ -365,6 +382,10 @@ func main() {
 			var execute map[string]string
 			if err = json.NewDecoder(r.Body).Decode(&execute); err == nil {
 				id, _ := strconv.Atoi(execute["id"])
+				if id >= len(Connections) {
+					http.Error(w, "{\"error\":\"unknown host id\"}", http.StatusInternalServerError)
+					return
+				}
 				connection := Connections[id]
 
 				fmt.Fprint(connection.Stdin, execute["command"]+"\n")
@@ -399,7 +420,7 @@ func main() {
 			return
 		default:
 			// Not Found
-			http.Error(w, "{\"error\":\"Unknown URI.\"}", http.StatusNotFound)
+			http.Error(w, "{\"error\":\"unknown uri\"}", http.StatusNotFound)
 			return
 		}
 	})))
