@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,10 +16,10 @@ import (
 	"golang.org/x/crypto/ssh"
 	"fmt"
 	"bufio"
-	"sync"
 )
 
 type Config struct {
+	Listen string `json:"listen"`
 	Secret string `json:"secret"`
 	Users  []User `json:"users"`
 	Hosts  []Host `json:"hosts"`
@@ -38,9 +37,11 @@ type Host struct {
 	Password    string `json:"password"`
 	PublicKey   string `json:"publicKey"`
 	AutoConnect bool   `json:"autoConnect"`
+	AutoPoll    bool   `json:"autoPoll"`
 }
 
 var DefaultConfig = Config{
+	":8080",
 	"pgpbYOVcEpoAkl0W0leYHeyTs4nbNpZyTgEFZyrJEDwytbUrPfLIjXYhi3X2nkMTg6nWA42qBb6jKe7rzoAwOoxPEVMNyWSw4DPY3JokIDlSbb5MDDo6Y1pU4F4Ryak29iZoPCQVEHuCAKS84uSUsJz2TtLmKf7g02Hu1sRYxpk87QlWLFXowZBw5d0WLvHyygvHId6E",
 	[]User{
 		{
@@ -53,10 +54,19 @@ var DefaultConfig = Config{
 }
 
 type Connection struct {
+	Client  *ssh.Client
 	Session *ssh.Session
-	Stdout  io.Reader
-	Stderr  io.Reader
-	Stdin   io.WriteCloser
+
+	Stdout io.Reader
+	Stderr io.Reader
+	Stdin  io.WriteCloser
+
+	StdoutScanner *bufio.Scanner
+	StderrScanner *bufio.Scanner
+
+	In  chan string
+	Out chan string
+	Err chan string
 }
 
 var Connections []Connection
@@ -66,11 +76,10 @@ func loadConfig() (Config, error) {
 	// Load Config File
 	var config Config
 	if configFile, err := os.OpenFile("config.json", os.O_RDONLY, 0644); err == nil {
-		if err := json.NewDecoder(configFile).Decode(&config); err != nil {
-			return DefaultConfig, err
+		defer configFile.Close()
+		if err := jsonDecode(configFile, &config); err == nil {
+			return config, nil
 		}
-		configFile.Close()
-		return config, nil
 	}
 	return DefaultConfig, nil
 }
@@ -194,18 +203,19 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 		}
 	}
 
-	var connection *ssh.Client
-	if connection, err = ssh.Dial("tcp", host.Host, &ssh.ClientConfig{
+	var client *ssh.Client
+	if client, err = ssh.Dial("tcp", host.Host, &ssh.ClientConfig{
 		User: host.Username,
 		Auth: auth,
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			return nil // TODO: Store and check the host key.
 		},
 	}); err == nil {
+		//defer connection.Close()
 		var session *ssh.Session
-		if session, err = connection.NewSession(); err == nil {
+		if session, err = client.NewSession(); err == nil {
 			//defer session.Close()
-			if err = session.RequestPty("xterm", 100, 1024, ssh.TerminalModes{}); err == nil {
+			if err = session.RequestPty("xterm", 80, 40, ssh.TerminalModes{}); err == nil {
 				stdout, err := session.StdoutPipe()
 				if err == nil {
 					stderr, err := session.StderrPipe()
@@ -221,30 +231,55 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 										host.Password,
 										host.PublicKey,
 										host.AutoConnect,
+										host.AutoPoll,
 									})
 									if err = saveConfig(config); err != nil {
 										return ConnectResponse{}, err
 									}
 								}
 
-								// Keep Alive
-								go func() {
-									var err error
-									for err == nil {
-										time.Sleep(time.Second * 10)
-										_, _, err = connection.SendRequest("keepalive@calebgray.com", true, nil)
-									}
-								}()
-
-								// Return the Response
-								Connections = append(Connections, Connection{
+								// Create Connection
+								connectionId := len(Connections)
+								connection := Connection{
+									client,
 									session,
+
 									stdout,
 									stderr,
 									stdin,
-								})
+
+									bufio.NewScanner(stdout),
+									bufio.NewScanner(stderr),
+
+									make(chan string),
+									make(chan string),
+									make(chan string),
+								}
+
+								// IO Channels
+								go func() {
+									for {
+										fmt.Fprint(connection.Stdin, <-connection.In)
+									}
+								}()
+								pipeToChannel := func(r io.Reader, c chan string) {
+									bytes := make([]byte, 1024)
+									for {
+										if n, err := r.Read(bytes); err == nil {
+											c <- string(bytes[:n])
+										} else {
+											break
+										}
+									}
+									log.Fatal("Connection (", connectionId, ") failed to read:", err.Error())
+								}
+								go pipeToChannel(connection.Stdout, connection.Out)
+								go pipeToChannel(connection.Stderr, connection.Err)
+
+								// Return the Response
+								Connections = append(Connections, connection)
 								return ConnectResponse{
-									len(Connections) - 1,
+									connectionId,
 								}, nil
 							}
 						}
@@ -254,6 +289,18 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 		}
 	}
 	return ConnectResponse{}, err
+}
+
+func sendInput(connectionId int, command string) error {
+	if connectionId >= len(Connections) {
+		return fmt.Errorf("unknown host id")
+	}
+	Connections[connectionId].In <- command
+	return nil
+}
+
+func sendError(w http.ResponseWriter, e error, s int) {
+	http.Error(w, "{\"error\":\""+strings.Replace(e.Error(), "\"", "\\\"", -1)+"\"}", s)
 }
 
 func main() {
@@ -271,7 +318,8 @@ func main() {
 
 	// Fallback to File Server
 	fileServer := http.FileServer(http.Dir("public"))
-	log.Fatal(http.ListenAndServe(":8080", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	log.Println("Listening on", config.Listen)
+	log.Fatal(http.ListenAndServe(config.Listen, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Log Requests
 		log.Println(r.URL.String())
 
@@ -301,13 +349,13 @@ func main() {
 					if data, err := jsonEncode(&response); err == nil {
 						w.Write(data)
 					} else {
-						http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+						sendError(w, err, http.StatusInternalServerError)
 					}
 				} else {
-					http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+					sendError(w, err, http.StatusInternalServerError)
 				}
 			} else {
-				http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+				sendError(w, err, http.StatusInternalServerError)
 			}
 			return
 		}
@@ -317,7 +365,7 @@ func main() {
 		if token, err := request.ParseFromRequestWithClaims(r, request.AuthorizationHeaderExtractor, &jwt.StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
 			return []byte(config.Secret), nil
 		}); err != nil || !token.Valid {
-			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusUnauthorized)
+			sendError(w, err, http.StatusUnauthorized)
 			return
 		} else {
 			claims = token.Claims.(*jwt.StandardClaims)
@@ -334,65 +382,48 @@ func main() {
 		// Handle the Request
 		switch r.URL.String() {
 		case "/poll":
-			var poll map[string]string
-			if err = json.NewDecoder(r.Body).Decode(&poll); err == nil {
-				id, _ := strconv.Atoi(poll["id"])
-				if id >= len(Connections) {
-					http.Error(w, "{\"error\":\"unknown host id\"}", http.StatusInternalServerError)
+			type Poll struct {
+				Id int `json:"id"`
+			}
+			var poll Poll
+			if err = jsonDecode(r.Body, &poll); err == nil {
+				if poll.Id >= len(Connections) {
+					sendError(w, err, http.StatusInternalServerError)
 					return
 				}
-				connection := Connections[id]
+				connection := Connections[poll.Id]
 
-				var wg sync.WaitGroup
-				wg.Add(1)
-
-				var output, errors string
-				go func() {
-					scanner := bufio.NewScanner(connection.Stdout)
-					for scanner.Scan() {
-						output += scanner.Text() + "\n"
+				// Read Channels
+				var stdout, stderr string
+				for len(stdout) == 0 && len(stderr) == 0 {
+					select {
+					case stdout = <-connection.Out:
+					default:
 					}
-					scanner = bufio.NewScanner(connection.Stderr)
-					for scanner.Scan() {
-						errors += scanner.Text() + "\n"
+					select {
+					case stderr = <-connection.Err:
+					default:
 					}
-					wg.Done()
-				}()
-
-				// Timeout
-				go func() {
-					time.Sleep(time.Second * 1)
-					wg.Done()
-				}()
-
-				// Wait for Output or Timeout
-				wg.Wait()
+				}
 
 				// Respond
 				if err = writeResponse(w, &map[string]interface{}{
-					"out": output,
-					"err": errors,
+					"out": stdout,
+					"err": stderr,
 				}); err == nil {
 					return
 				}
 			}
-			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+			sendError(w, err, http.StatusInternalServerError)
 			return
 		case "/execute":
-			var execute map[string]string
-			if err = json.NewDecoder(r.Body).Decode(&execute); err == nil {
-				id, _ := strconv.Atoi(execute["id"])
-				if id >= len(Connections) {
-					http.Error(w, "{\"error\":\"unknown host id\"}", http.StatusInternalServerError)
-					return
-				}
-				connection := Connections[id]
-
-				fmt.Fprint(connection.Stdin, execute["command"]+"\n")
-
-				// Respond
-				var output []byte
-				if _, err = connection.Stdout.Read(output); err == nil {
+			type Execute struct {
+				Id      int    `json:"id"`
+				Command string `json:"command"`
+			}
+			var execute Execute
+			if err := jsonDecode(r.Body, &execute); err == nil {
+				if err = sendInput(execute.Id, execute.Command+"\n"); err == nil {
 					if err = writeResponse(w, &map[string]interface{}{
 						"success": true,
 					}); err == nil {
@@ -400,7 +431,7 @@ func main() {
 					}
 				}
 			}
-			http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+			sendError(w, err, http.StatusInternalServerError)
 			return
 		case "/addhost":
 			var host Host
@@ -408,10 +439,10 @@ func main() {
 				if response, err := connect(host, config, true); err == nil {
 					writeResponse(w, response)
 				} else {
-					http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+					sendError(w, err, http.StatusInternalServerError)
 				}
 			} else {
-				http.Error(w, "{\"error\":\""+strings.Replace(err.Error(), "\"", "\\\"", -1)+"\"}", http.StatusInternalServerError)
+				sendError(w, err, http.StatusInternalServerError)
 			}
 			return
 		case "/status":
@@ -420,7 +451,7 @@ func main() {
 			return
 		default:
 			// Not Found
-			http.Error(w, "{\"error\":\"unknown uri\"}", http.StatusNotFound)
+			sendError(w, fmt.Errorf("unknown uri"), http.StatusNotFound)
 			return
 		}
 	})))

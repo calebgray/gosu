@@ -21,14 +21,20 @@
             var btn, prevInnerHTML;
             var data = {};
             for (var i = 0; i < form.length; ++i) {
-                if (form[i].type === "submit") {
-                    btn = form[i];
+                var element = form[i];
+                if (element.type === "submit") {
+                    btn = element;
                     if (btn.innerHTML === 'Loading...') return false;
                     prevInnerHTML = btn.innerHTML;
                     btn.innerHTML = 'Loading...';
                     // TODO: Disable Submit Button
-                } else if (form[i].name) {
-                    data[ form[i].name ] = (form[i].type === "checkbox") ? form[i].value === "on" : form[i].value;
+                } else if (element.name) {
+                    if (element.type === "checkbox") {
+                        data[element.name] = (element.value === "on");
+                    } else if (element.value !== "") {
+                        var numValue = element.value * 1;
+                        data[element.name] = (element.value == numValue) ? numValue : element.value;
+                    }
                 }
             }
             $$.Fetch(form.action.substr(form.action.indexOf('#') + 1), $$.OverrideDefaultFetchOptions({
@@ -49,23 +55,55 @@
             return false;
         }
 
+        // Handle Polling
+        function onPoll(response) {
+            document.getElementById('stdout').innerHTML += response['out'];
+            document.getElementById('stderr').innerHTML += response['err'];
+        }
+
+        // Auto-Polling
+        var polls = {};
+        function polling(checkbox, id) {
+            if ((checkbox == null || checkbox.checked) && !polls[id]) {
+                // Poll Loop
+                polls[id] = $$.Fetch('/poll', $$.OverrideDefaultFetchOptions({
+                    data: { pollId: id },
+                    onSuccess: function(xhr) {
+                        onPoll(JSON.parse(xhr.response))
+                    },
+                    onFailure: function(xhr) {
+                        if (polls[id] === false) return;
+                        console.log("polling failure :: " + xhr.response);
+                    },
+                    onComplete: function() {
+                        if (polls[id] === false) return;
+                        polls[id] = null;
+                        polling(checkbox, id);
+                    }
+                }));
+            } else if (polls[id]) {
+                // Abort
+                var poll = polls[id];
+                polls[id] = false;
+                poll.abort();
+            }
+        }
+
         // Handle Login
         function onLogin(response) {
             defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + response['token'] ];
             $$.SetDefaultFetchOptions(defaultFetchOptions);
 
             var html = '';
-            response['hosts'].forEach(function(value){
-                html += value.host;
-                html += "<br>";
+            response['hosts'].forEach(function(value, id){
+                if (value.autoPoll) {
+                    polling(null, id);
+                    html += '<input type="checkbox" checked="checked" onchange="polling(this, ' + id + ')"> ' + value.host + '<br>';
+                } else {
+                    html += '<input type="checkbox" onchange="polling(this, ' + id + ')"> ' + value.host + '<br>';
+                }
             });
             document.getElementById('hosts').innerHTML = html;
-        }
-
-        // Handle Polling
-        function onPoll(response) {
-            document.getElementById('stdout').innerHTML += response['out'];
-            document.getElementById('stderr').innerHTML += response['err'];
         }
     </script>
 </head>
@@ -108,6 +146,10 @@
                     <div class="form-group">
                         <input type="checkbox" class="form-control" id="autoConnect" name="autoConnect" checked="checked">
                         <label for="autoConnect">Automatically Connect</label>
+                    </div>
+                    <div class="form-group">
+                        <input type="checkbox" class="form-control" id="autoPoll" name="autoPoll" checked="checked">
+                        <label for="autoPoll">Automatically Poll</label>
                     </div>
                     <button type="submit" class="btn btn-primary">
                         Add Host
