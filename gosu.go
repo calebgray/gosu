@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,7 +14,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
 	"github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"golang.org/x/crypto/ssh"
@@ -38,7 +38,6 @@ type Host struct {
 	Password    string `json:"password"`
 	PublicKey   string `json:"publicKey"`
 	AutoConnect bool   `json:"autoConnect"`
-	AutoPoll    bool   `json:"autoPoll"`
 }
 
 var randSecret = make([]byte, 1024)
@@ -145,7 +144,7 @@ func login(username string, password string, config Config) (LoginResponse, erro
 			continue
 		}
 		if user.Password != password {
-			return LoginResponse{}, fmt.Errorf("incorrect password")
+			return LoginResponse{}, errors.New("incorrect password")
 		} else {
 			// Generate a Token
 			token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
@@ -176,7 +175,7 @@ func login(username string, password string, config Config) (LoginResponse, erro
 			return loginResponse, nil
 		}
 	}
-	return LoginResponse{}, fmt.Errorf("user not found")
+	return LoginResponse{}, errors.New("user not found")
 }
 
 type ConnectResponse struct {
@@ -231,7 +230,6 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 										host.Password,
 										host.PublicKey,
 										host.AutoConnect,
-										host.AutoPoll,
 									})
 									if err = saveConfig(config); err != nil {
 										return ConnectResponse{}, err
@@ -254,7 +252,11 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 								// IO Channels
 								go func() {
 									for {
-										fmt.Fprint(stdin, <-connection.In)
+										in := <-connection.In
+										if connection.Closed {
+											reconnect(connectionId)
+										}
+										fmt.Fprint(stdin, in)
 									}
 									log.Print("Connection (", connectionId, ") stdin failed.")
 									closeConnection(connectionId)
@@ -291,19 +293,23 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 	return ConnectResponse{}, err
 }
 
+func reconnect(connectionId int) {
+
+}
+
 func closeConnection(connectionId int) error {
 	if connectionId >= len(Connections) {
-		return fmt.Errorf("unknown host id")
+		return errors.New("unknown host id")
 	}
 	Connections[connectionId].Closed = true
 	return nil
 }
 
-func sendInput(connectionId int, command string) error {
+func sendString(connectionId int, str string) error {
 	if connectionId >= len(Connections) {
-		return fmt.Errorf("unknown host id")
+		return errors.New("unknown host id")
 	}
-	Connections[connectionId].In <- command
+	Connections[connectionId].In <- str
 	return nil
 }
 
@@ -389,22 +395,22 @@ func main() {
 
 		// Handle the Request
 		switch r.URL.String() {
-		case "/poll":
-			type Poll struct {
+		case "/read":
+			type Read struct {
 				Id int `json:"id"`
 			}
-			var poll Poll
-			if err = jsonDecode(r.Body, &poll); err == nil {
-				if poll.Id >= len(Connections) {
+			var read Read
+			if err = jsonDecode(r.Body, &read); err == nil {
+				if read.Id >= len(Connections) {
 					sendError(w, err, http.StatusInternalServerError)
 					return
 				}
-				connection := Connections[poll.Id]
+				connection := Connections[read.Id]
 
 				// Sanity Check
 				if connection.Closed {
 					writeResponse(w, &map[string]interface{}{
-						"id":  poll.Id,
+						"id":  read.Id,
 						"out": nil,
 						"err": nil,
 					})
@@ -430,7 +436,7 @@ func main() {
 
 				// Respond
 				if err = writeResponse(w, &map[string]interface{}{
-					"id":  poll.Id,
+					"id":  read.Id,
 					"out": stdout,
 					"err": stderr,
 				}); err == nil {
@@ -439,14 +445,14 @@ func main() {
 			}
 			sendError(w, err, http.StatusInternalServerError)
 			return
-		case "/execute":
-			type Execute struct {
-				Id      int    `json:"id"`
-				Command string `json:"command"`
+		case "/write":
+			type Send struct {
+				Id   int    `json:"id"`
+				Data string `json:"data"`
 			}
-			var execute Execute
-			if err := jsonDecode(r.Body, &execute); err == nil {
-				if err = sendInput(execute.Id, execute.Command+"\n"); err == nil {
+			var send Send
+			if err := jsonDecode(r.Body, &send); err == nil {
+				if err = sendString(send.Id, send.Data); err == nil {
 					if err = writeResponse(w, &map[string]interface{}{
 						"success": true,
 					}); err == nil {
@@ -474,7 +480,7 @@ func main() {
 			return
 		default:
 			// Not Found
-			sendError(w, fmt.Errorf("unknown uri"), http.StatusNotFound)
+			sendError(w, errors.New("unknown uri"), http.StatusNotFound)
 			return
 		}
 	})))

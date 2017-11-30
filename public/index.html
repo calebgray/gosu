@@ -1,7 +1,9 @@
 <html>
 <head>
     <link rel="stylesheet" href="/libs/bootstrap.min.css">
+    <link rel="stylesheet" href="/libs/xterm.css">
     <script type="text/javascript" src="/libs/bootstrap-native-v4.min.js"></script>
+    <script type="text/javascript" src="/libs/xterm.js"></script>
     <script type="text/javascript" src="/libs/app.js"></script>
     <script type="text/javascript">
         'use strict';
@@ -55,25 +57,33 @@
             return false;
         }
 
+        // HACK: Make this dynamic.
+        var term;
+
         // Handle Polling
         var polls = {};
         function onPoll(response) {
             if (response['out'] == null || response['err'] == null) {
                 var id = response['id'];
-                document.getElementById('autopoll' + id).checked = false;
                 polls[id] = false;
                 return;
             }
-            document.getElementById('stdout').innerHTML += response['out'];
-            document.getElementById('stderr').innerHTML += response['err'];
+
+            if (!term) {
+                console.log(response['out']);
+                console.error(response['err']);
+            } else {
+                term.write(response['out']);
+                term.write(response['err']);
+            }
         }
 
         // Auto-Polling
         function polling(checkbox, id) {
             if ((checkbox == null || checkbox.checked) && !polls[id]) {
                 // Poll Loop
-                polls[id] = $$.Fetch('/poll', $$.OverrideDefaultFetchOptions({
-                    data: { pollId: id },
+                polls[id] = $$.Fetch('/read', $$.OverrideDefaultFetchOptions({
+                    data: { id: id },
                     onSuccess: function(xhr) {
                         onPoll(JSON.parse(xhr.response))
                     },
@@ -97,12 +107,31 @@
 
         // Add a Host
         function addHost(host, id) {
-            if (host.autoPoll) {
-                polling(null, id);
-                document.getElementById('hosts').innerHTML += '<input type="checkbox" id="autopoll' + id + '" checked="checked" onchange="polling(this, ' + id + ')"> ' + host.host + '<br>';
-            } else {
-                document.getElementById('hosts').innerHTML += '<input type="checkbox" id="autopoll' + id + '" onchange="polling(this, ' + id + ')"> ' + host.host + '<br>';
+            // HACK: Make this dynamic.
+            if (!term) {
+                term = new Terminal();
+                term.open(document.getElementById('terminal'));
+                term.on('key', function(str) {
+                    $$.Fetch('/write', $$.OverrideDefaultFetchOptions({
+                        data: {
+                            id: 0,
+                            data: str
+                        },
+                        onSuccess: function(xhr) {
+                            //
+                        },
+                        onFailure: function(xhr) {
+                            //
+                        },
+                        onComplete: function() {
+                            //
+                        }
+                    }));
+                });
             }
+
+            polling(null, id);
+            document.getElementById('hosts').innerHTML += id + ': ' + host.host + '<br>';
         }
 
         // Handle Login
@@ -161,38 +190,8 @@
                         <input type="checkbox" class="form-control" id="autoConnect" name="autoConnect" checked="checked">
                         <label for="autoConnect">Automatically Connect</label>
                     </div>
-                    <div class="form-group">
-                        <input type="checkbox" class="form-control" id="autoPoll" name="autoPoll" checked="checked">
-                        <label for="autoPoll">Automatically Poll</label>
-                    </div>
                     <button type="submit" class="btn btn-primary">
                         Add Host
-                    </button>
-                </form>
-            </div>
-            <div class="col">
-                <form id="execute" action="#/execute" onsubmit="return onSubmit(this)">
-                    <div class="form-group">
-                        <label for="executeId">Id</label>
-                        <input type="text" class="form-control" id="executeId" name="id" placeholder="Id" value="0">
-                    </div>
-                    <div class="form-group">
-                        <label for="executeCommand">Command</label>
-                        <input type="text" class="form-control" id="executeCommand" name="command" placeholder="Command" value="ls">
-                    </div>
-                    <button type="submit" class="btn btn-primary">
-                        Execute
-                    </button>
-                </form>
-            </div>
-            <div class="col">
-                <form id="poll" action="#/poll" onsubmit="return onSubmit(this, onPoll)">
-                    <div class="form-group">
-                        <label for="pollId">Id</label>
-                        <input type="text" class="form-control" id="pollId" name="id" placeholder="Id" value="0">
-                    </div>
-                    <button type="submit" class="btn btn-primary">
-                        Poll
                     </button>
                 </form>
             </div>
@@ -201,11 +200,10 @@
             <div class="col">
                 <div id="hosts"></div>
             </div>
+        </div>
+        <div class="row">
             <div class="col">
-                <pre id="stdout"></pre>
-            </div>
-            <div class="col">
-                <pre id="stderr"></pre>
+                <div id="terminal"></div>
             </div>
         </div>
     </div>
