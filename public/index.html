@@ -56,13 +56,19 @@
         }
 
         // Handle Polling
+        var polls = {};
         function onPoll(response) {
+            if (response['out'] == null || response['err'] == null) {
+                var id = response['id'];
+                document.getElementById('autopoll' + id).checked = false;
+                polls[id] = false;
+                return;
+            }
             document.getElementById('stdout').innerHTML += response['out'];
             document.getElementById('stderr').innerHTML += response['err'];
         }
 
         // Auto-Polling
-        var polls = {};
         function polling(checkbox, id) {
             if ((checkbox == null || checkbox.checked) && !polls[id]) {
                 // Poll Loop
@@ -89,21 +95,29 @@
             }
         }
 
+        // Add a Host
+        function addHost(host, id) {
+            if (host.autoPoll) {
+                polling(null, id);
+                document.getElementById('hosts').innerHTML += '<input type="checkbox" id="autopoll' + id + '" checked="checked" onchange="polling(this, ' + id + ')"> ' + host.host + '<br>';
+            } else {
+                document.getElementById('hosts').innerHTML += '<input type="checkbox" id="autopoll' + id + '" onchange="polling(this, ' + id + ')"> ' + host.host + '<br>';
+            }
+        }
+
         // Handle Login
         function onLogin(response) {
             defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + response['token'] ];
             $$.SetDefaultFetchOptions(defaultFetchOptions);
 
-            var html = '';
-            response['hosts'].forEach(function(value, id){
-                if (value.autoPoll) {
-                    polling(null, id);
-                    html += '<input type="checkbox" checked="checked" onchange="polling(this, ' + id + ')"> ' + value.host + '<br>';
-                } else {
-                    html += '<input type="checkbox" onchange="polling(this, ' + id + ')"> ' + value.host + '<br>';
-                }
-            });
-            document.getElementById('hosts').innerHTML = html;
+            // Replace Hosts
+            document.getElementById('hosts').innerHTML = '';
+            response['hosts'].forEach(addHost);
+        }
+
+        // Handle Hosts
+        function onAddHost(response) {
+            addHost(response['host'], response['id'])
         }
     </script>
 </head>
@@ -126,7 +140,7 @@
                 </form>
             </div>
             <div class="col">
-                <form id="addhost" action="#/addhost" onsubmit="return onSubmit(this)">
+                <form id="addhost" action="#/addhost" onsubmit="return onSubmit(this, onAddHost)">
                     <div class="form-group">
                         <label for="host">Host</label>
                         <input type="text" class="form-control" id="host" name="host" placeholder="Host" value="cloud02.calebgray.com:22">

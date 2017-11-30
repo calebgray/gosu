@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -14,8 +17,6 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"golang.org/x/crypto/ssh"
-	"fmt"
-	"bufio"
 )
 
 type Config struct {
@@ -40,9 +41,12 @@ type Host struct {
 	AutoPoll    bool   `json:"autoPoll"`
 }
 
+var randSecret = make([]byte, 1024)
+var _, _ = rand.Read(randSecret)
+
 var DefaultConfig = Config{
 	":8080",
-	"pgpbYOVcEpoAkl0W0leYHeyTs4nbNpZyTgEFZyrJEDwytbUrPfLIjXYhi3X2nkMTg6nWA42qBb6jKe7rzoAwOoxPEVMNyWSw4DPY3JokIDlSbb5MDDo6Y1pU4F4Ryak29iZoPCQVEHuCAKS84uSUsJz2TtLmKf7g02Hu1sRYxpk87QlWLFXowZBw5d0WLvHyygvHId6E",
+	base64.StdEncoding.EncodeToString(randSecret),
 	[]User{
 		{
 			"admin",
@@ -57,16 +61,11 @@ type Connection struct {
 	Client  *ssh.Client
 	Session *ssh.Session
 
-	Stdout io.Reader
-	Stderr io.Reader
-	Stdin  io.WriteCloser
-
-	StdoutScanner *bufio.Scanner
-	StderrScanner *bufio.Scanner
-
 	In  chan string
 	Out chan string
 	Err chan string
+
+	Closed bool
 }
 
 var Connections []Connection
@@ -181,7 +180,8 @@ func login(username string, password string, config Config) (LoginResponse, erro
 }
 
 type ConnectResponse struct {
-	Id int `json:"id"`
+	Id   int  `json:"id"`
+	Host Host `json:"host"`
 }
 
 func connect(host Host, config Config, save bool) (ConnectResponse, error) {
@@ -244,42 +244,42 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 									client,
 									session,
 
-									stdout,
-									stderr,
-									stdin,
+									make(chan string),
+									make(chan string),
+									make(chan string),
 
-									bufio.NewScanner(stdout),
-									bufio.NewScanner(stderr),
-
-									make(chan string),
-									make(chan string),
-									make(chan string),
+									false,
 								}
 
 								// IO Channels
 								go func() {
 									for {
-										fmt.Fprint(connection.Stdin, <-connection.In)
+										fmt.Fprint(stdin, <-connection.In)
 									}
+									log.Print("Connection (", connectionId, ") stdin failed.")
+									closeConnection(connectionId)
 								}()
 								pipeToChannel := func(r io.Reader, c chan string) {
+									var n int
 									bytes := make([]byte, 1024)
 									for {
-										if n, err := r.Read(bytes); err == nil {
+										if n, err = r.Read(bytes); err == nil {
 											c <- string(bytes[:n])
 										} else {
 											break
 										}
 									}
-									log.Fatal("Connection (", connectionId, ") failed to read:", err.Error())
+									log.Print("Connection (", connectionId, ") failed: ", err.Error())
+									closeConnection(connectionId)
 								}
-								go pipeToChannel(connection.Stdout, connection.Out)
-								go pipeToChannel(connection.Stderr, connection.Err)
+								go pipeToChannel(stdout, connection.Out)
+								go pipeToChannel(stderr, connection.Err)
 
 								// Return the Response
 								Connections = append(Connections, connection)
 								return ConnectResponse{
 									connectionId,
+									host,
 								}, nil
 							}
 						}
@@ -289,6 +289,14 @@ func connect(host Host, config Config, save bool) (ConnectResponse, error) {
 		}
 	}
 	return ConnectResponse{}, err
+}
+
+func closeConnection(connectionId int) error {
+	if connectionId >= len(Connections) {
+		return fmt.Errorf("unknown host id")
+	}
+	Connections[connectionId].Closed = true
+	return nil
 }
 
 func sendInput(connectionId int, command string) error {
@@ -393,21 +401,36 @@ func main() {
 				}
 				connection := Connections[poll.Id]
 
+				// Sanity Check
+				if connection.Closed {
+					writeResponse(w, &map[string]interface{}{
+						"id":  poll.Id,
+						"out": nil,
+						"err": nil,
+					})
+					return
+				}
+
 				// Read Channels
 				var stdout, stderr string
 				for len(stdout) == 0 && len(stderr) == 0 {
-					select {
-					case stdout = <-connection.Out:
-					default:
+					if connection.Out != nil {
+						select {
+						case stdout = <-connection.Out:
+						default:
+						}
 					}
-					select {
-					case stderr = <-connection.Err:
-					default:
+					if connection.Err != nil {
+						select {
+						case stderr = <-connection.Err:
+						default:
+						}
 					}
 				}
 
 				// Respond
 				if err = writeResponse(w, &map[string]interface{}{
+					"id":  poll.Id,
 					"out": stdout,
 					"err": stderr,
 				}); err == nil {
