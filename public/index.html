@@ -4,153 +4,160 @@
     <link rel="stylesheet" href="/libs/xterm.css">
     <script type="text/javascript" src="/libs/bootstrap-native-v4.min.js"></script>
     <script type="text/javascript" src="/libs/xterm.js"></script>
+    <script type="text/javascript" src="/libs/xterm-fit.js"></script>
     <script type="text/javascript" src="/libs/app.js"></script>
-    <script type="text/javascript">
-        'use strict';
+<script type="text/javascript">
+'use strict';
 
-        // Default Fetch Options
-        var defaultFetchOptions = {
-            headers: [
-                [ 'Accept', 'application/json' ],
-                [ 'Content-Type', 'application/json' ],
-                [ 'Authorization', '' ]
-            ]
-        };
-        $$.SetDefaultFetchOptions(defaultFetchOptions);
+// Default Fetch Options
+var defaultFetchOptions = {
+    headers: [
+        [ 'Accept', 'application/json' ],
+        [ 'Content-Type', 'application/json' ],
+        [ 'Authorization', '' ]
+    ]
+};
+$$.SetDefaultFetchOptions(defaultFetchOptions);
 
-        // Manage Forms
-        function onSubmit(form, callback) {
-            var btn, prevInnerHTML;
-            var data = {};
-            for (var i = 0; i < form.length; ++i) {
-                var element = form[i];
-                if (element.type === "submit") {
-                    btn = element;
-                    if (btn.innerHTML === 'Loading...') return false;
-                    prevInnerHTML = btn.innerHTML;
-                    btn.innerHTML = 'Loading...';
-                    // TODO: Disable Submit Button
-                } else if (element.name) {
-                    if (element.type === "checkbox") {
-                        data[element.name] = (element.value === "on");
-                    } else if (element.value !== "") {
-                        var numValue = element.value * 1;
-                        data[element.name] = (element.value == numValue) ? numValue : element.value;
-                    }
-                }
+// Manage Forms
+function onSubmit(form, callback) {
+    var btn, prevInnerHTML;
+    var data = {};
+    for (var i = 0; i < form.length; ++i) {
+        var element = form[i];
+        if (element.type === "submit") {
+            btn = element;
+            if (btn.innerHTML === 'Loading...') return false;
+            prevInnerHTML = btn.innerHTML;
+            btn.innerHTML = 'Loading...';
+            // TODO: Disable Submit Button
+        } else if (element.name) {
+            if (element.type === "checkbox") {
+                data[element.name] = (element.value === "on");
+            } else if (element.value !== "") {
+                var numValue = element.value * 1;
+                data[element.name] = (element.value == numValue) ? numValue : element.value;
             }
-            $$.Fetch(form.action.substr(form.action.indexOf('#') + 1), $$.OverrideDefaultFetchOptions({
-                data: data,
-                onSuccess: !callback ? null : function(xhr) {
-                    callback(JSON.parse(xhr.response));
-                },
-                onFailure: function(xhr, uri) {
-                    console.log(uri + " :: failure :: " + xhr.response);
-                },
-                onComplete: function() {
-                    if (btn) {
-                        btn.innerHTML = prevInnerHTML;
-                        // TODO: Enable Submit Button
-                    }
+        }
+    }
+    $$.Fetch(form.action.substr(form.action.indexOf('#') + 1), $$.OverrideDefaultFetchOptions({
+        data: data,
+        onSuccess: !callback ? null : function(xhr) {
+            callback(JSON.parse(xhr.response));
+        },
+        onFailure: function(xhr, uri) {
+            console.log(uri + " :: failure :: " + xhr.response);
+        },
+        onComplete: function() {
+            if (btn) {
+                btn.innerHTML = prevInnerHTML;
+                // TODO: Enable Submit Button
+            }
+        }
+    }));
+    return false;
+}
+
+// HACK: Make this dynamic.
+var term;
+
+// Handle Polling
+var polls = {};
+function onPoll(response) {
+    if (response['out'] == null || response['err'] == null) {
+        var id = response['id'];
+        polls[id] = false;
+        return;
+    }
+
+    if (!term) {
+        console.log(response['out']);
+        console.error(response['err']);
+    } else {
+        term.write(response['out']);
+        term.write(response['err']);
+    }
+}
+
+// Auto-Polling
+function polling(checkbox, id) {
+    if ((checkbox == null || checkbox.checked) && !polls[id]) {
+        // Poll Loop
+        polls[id] = $$.Fetch('/read', $$.OverrideDefaultFetchOptions({
+            data: { id: id },
+            onSuccess: function(xhr) {
+                onPoll(JSON.parse(xhr.response))
+            },
+            onFailure: function(xhr) {
+                if (polls[id] === false) return;
+                console.log("polling failure :: " + xhr.response);
+            },
+            onComplete: function() {
+                if (polls[id] === false) return;
+                polls[id] = null;
+                polling(checkbox, id);
+            }
+        }));
+    } else if (polls[id]) {
+        // Abort
+        var poll = polls[id];
+        polls[id] = false;
+        poll.abort();
+    }
+}
+
+// Add a Host
+function addHost(host, id) {
+    // HACK: Make this dynamic.
+    if (!term) {
+        term = new Terminal();
+        term.open(document.getElementById('terminal'));
+        term.on('resize', function(size) {
+            $$.Fetch('/resize', $$.OverrideDefaultFetchOptions({
+                data: {
+                    id: 0,
+                    cols: size.cols,
+                    rows: size.rows
                 }
             }));
-            return false;
-        }
+        });
+        term.on('key', function(str) {
+            $$.Fetch('/write', $$.OverrideDefaultFetchOptions({
+                data: {
+                    id: 0,
+                    data: str
+                }
+            }));
+        });
+        term.fit();
+    }
 
-        // HACK: Make this dynamic.
-        var term;
+    polling(null, id);
+    document.getElementById('hosts').innerHTML += id + ': ' + host.host + '<br>';
+}
 
-        // Handle Polling
-        var polls = {};
-        function onPoll(response) {
-            if (response['out'] == null || response['err'] == null) {
-                var id = response['id'];
-                polls[id] = false;
-                return;
-            }
+// Handle Login
+function onLogin(response) {
+    defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + response['token'] ];
+    $$.SetDefaultFetchOptions(defaultFetchOptions);
 
-            if (!term) {
-                console.log(response['out']);
-                console.error(response['err']);
-            } else {
-                term.write(response['out']);
-                term.write(response['err']);
-            }
-        }
+    // Replace Hosts
+    document.getElementById('hosts').innerHTML = '';
+    response['hosts'].forEach(addHost);
+}
 
-        // Auto-Polling
-        function polling(checkbox, id) {
-            if ((checkbox == null || checkbox.checked) && !polls[id]) {
-                // Poll Loop
-                polls[id] = $$.Fetch('/read', $$.OverrideDefaultFetchOptions({
-                    data: { id: id },
-                    onSuccess: function(xhr) {
-                        onPoll(JSON.parse(xhr.response))
-                    },
-                    onFailure: function(xhr) {
-                        if (polls[id] === false) return;
-                        console.log("polling failure :: " + xhr.response);
-                    },
-                    onComplete: function() {
-                        if (polls[id] === false) return;
-                        polls[id] = null;
-                        polling(checkbox, id);
-                    }
-                }));
-            } else if (polls[id]) {
-                // Abort
-                var poll = polls[id];
-                polls[id] = false;
-                poll.abort();
-            }
-        }
-
-        // Add a Host
-        function addHost(host, id) {
-            // HACK: Make this dynamic.
-            if (!term) {
-                term = new Terminal();
-                term.open(document.getElementById('terminal'));
-                term.on('key', function(str) {
-                    $$.Fetch('/write', $$.OverrideDefaultFetchOptions({
-                        data: {
-                            id: 0,
-                            data: str
-                        },
-                        onSuccess: function(xhr) {
-                            //
-                        },
-                        onFailure: function(xhr) {
-                            //
-                        },
-                        onComplete: function() {
-                            //
-                        }
-                    }));
-                });
-            }
-
-            polling(null, id);
-            document.getElementById('hosts').innerHTML += id + ': ' + host.host + '<br>';
-        }
-
-        // Handle Login
-        function onLogin(response) {
-            defaultFetchOptions.headers[2] = [ 'Authorization', 'Bearer ' + response['token'] ];
-            $$.SetDefaultFetchOptions(defaultFetchOptions);
-
-            // Replace Hosts
-            document.getElementById('hosts').innerHTML = '';
-            response['hosts'].forEach(addHost);
-        }
-
-        // Handle Hosts
-        function onAddHost(response) {
-            addHost(response['host'], response['id'])
-        }
-    </script>
+// Handle Hosts
+function onAddHost(response) {
+    addHost(response['host'], response['id'])
+}
+</script>
+<style>
+#terminal {
+    height: 440px;
+}
+</style>
 </head>
-<body>
+<body onresize="term.fit()">
     <div class="container-fluid">
         <div class="row">
             <div class="col">

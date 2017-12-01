@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"time"
+
 	"github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"golang.org/x/crypto/ssh"
@@ -395,6 +397,27 @@ func main() {
 
 		// Handle the Request
 		switch r.URL.String() {
+		case "/resize":
+			type Resize struct {
+				Id   int `json:"id"`
+				Cols int `json:"cols"`
+				Rows int `json:"rows"`
+			}
+			var resize Resize
+			if err := jsonDecode(r.Body, &resize); err == nil {
+				if resize.Id >= len(Connections) {
+					sendError(w, errors.New("invalid connection id"), http.StatusInternalServerError)
+					return
+				}
+				connection := Connections[resize.Id]
+				size := make([]byte, 16)
+				binary.BigEndian.PutUint32(size, uint32(resize.Cols))
+				binary.BigEndian.PutUint32(size[4:], uint32(resize.Rows))
+				connection.Session.SendRequest("window-change", false, size)
+				return
+			}
+			sendError(w, err, http.StatusInternalServerError)
+			return
 		case "/read":
 			type Read struct {
 				Id int `json:"id"`
@@ -402,7 +425,7 @@ func main() {
 			var read Read
 			if err = jsonDecode(r.Body, &read); err == nil {
 				if read.Id >= len(Connections) {
-					sendError(w, err, http.StatusInternalServerError)
+					sendError(w, errors.New("invalid connection id"), http.StatusInternalServerError)
 					return
 				}
 				connection := Connections[read.Id]
