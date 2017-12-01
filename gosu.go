@@ -28,6 +28,8 @@ type Config struct {
 	Hosts  []Host `json:"hosts"`
 }
 
+var config Config
+
 type User struct {
 	Username string   `json:"username"`
 	Password string   `json:"password"`
@@ -319,10 +321,42 @@ func sendError(w http.ResponseWriter, e error, s int) {
 	http.Error(w, "{\"error\":\""+strings.Replace(e.Error(), "\"", "\\\"", -1)+"\"}", s)
 }
 
+type LoginData struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func handleLogin(loginData LoginData) (interface{}, error) {
+	if response, err := login(loginData.Username, loginData.Password, config); err == nil {
+		return response, nil
+	} else {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func handle(url string, handler func(LoginData) (interface{}, error), data LoginData, w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.String() != url {
+		return false
+	}
+	var err error
+	var response interface{}
+	if err = jsonDecode(r.Body, &data); err == nil {
+		response, err = handler(data)
+	} else {
+		sendError(w, err, 500)
+	}
+	if data, err := jsonEncode(&response); err == nil {
+		w.Write(data)
+	} else {
+		sendError(w, err, http.StatusInternalServerError)
+	}
+	return true
+}
+
 func main() {
 	// Load Config File
 	var err error
-	var config Config
 	if config, err = loadConfig(); err != nil {
 		log.Fatal("Error Parsing Config:", err.Error())
 		return
@@ -354,7 +388,10 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 
 		// Login?
-		if r.URL.String() == "/login" {
+		if handle("/login", handleLogin, LoginData{}, w, r) {
+			return
+		}
+		/*if r.URL.String() == "/login" {
 			type LoginData struct {
 				Username string `json:"username"`
 				Password string `json:"password"`
@@ -374,7 +411,7 @@ func main() {
 				sendError(w, err, http.StatusInternalServerError)
 			}
 			return
-		}
+		}*/
 
 		// Verify Authorization Token
 		var claims *jwt.StandardClaims
